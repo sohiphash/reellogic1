@@ -1,0 +1,238 @@
+<?php
+session_start();
+
+// إعدادات قاعدة البيانات
+$db_host = "sql112.infinityfree.com";
+$db_user = "if0_39757474";
+$db_pass = "gMcWCPwUP7FOHZ";
+$db_name = "your_database_name"; // ضع اسم قاعدة البيانات هنا
+
+$conn = new mysqli($db_host, $db_user, $db_pass, $db_name);
+if ($conn->connect_error) { die("Connection failed: " . $conn->connect_error); }
+
+// البريد الخاص بالمسؤول
+$admin_email = "sohipmarwan773019352@gmail.com";
+
+// تسجيل الدخول
+if (isset($_POST['action']) && $_POST['action'] == 'login') {
+    $email = $_POST['email'];
+    $pass = $_POST['password'];
+    $stmt = $conn->prepare("SELECT * FROM users WHERE email=? AND password=?");
+    $stmt->bind_param("ss",$email,$pass);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    if ($result->num_rows > 0) {
+        $user = $result->fetch_assoc();
+        $_SESSION['user'] = $user;
+        echo json_encode(["status"=>"success"]);
+    } else { echo json_encode(["status"=>"fail"]); }
+    exit();
+}
+
+// تسجيل مستخدم جديد
+if (isset($_POST['action']) && $_POST['action'] == 'register') {
+    $name = $_POST['name'];
+    $email = $_POST['email'];
+    $pass = $_POST['password'];
+    $stmt = $conn->prepare("SELECT * FROM users WHERE email=?");
+    $stmt->bind_param("s",$email);
+    $stmt->execute();
+    $res = $stmt->get_result();
+    if ($res->num_rows > 0) { echo json_encode(["status"=>"exists"]); exit(); }
+    $stmt = $conn->prepare("INSERT INTO users (name,email,password,plan,signupDate,videosCreated) VALUES (?,?,?,?,NOW(),0)");
+    $plan = 'free';
+    $stmt->bind_param("ssss",$name,$email,$pass,$plan);
+    $stmt->execute();
+    $_SESSION['user'] = ["id"=>$stmt->insert_id,"name"=>$name,"email"=>$email,"plan"=>$plan];
+    echo json_encode(["status"=>"success"]);
+    exit();
+}
+
+// إنشاء فيديو
+if (isset($_POST['action']) && $_POST['action'] == 'createVideo') {
+    if (!isset($_SESSION['user'])) { echo json_encode(["status"=>"fail"]); exit(); }
+    $title = $_POST['title'];
+    $desc = $_POST['description'];
+    $platform = $_POST['platform'];
+    $duration = $_POST['duration'];
+    $user_id = $_SESSION['user']['id'];
+
+    // التحقق من الحد الأقصى للفيديوهات للمجاني
+    if ($_SESSION['user']['plan']=='free') {
+        $stmt = $conn->prepare("SELECT COUNT(*) as cnt FROM videos WHERE userId=? AND DATE(date)=CURDATE()");
+        $stmt->bind_param("i",$user_id);
+        $stmt->execute();
+        $res = $stmt->get_result()->fetch_assoc();
+        if ($res['cnt']>=4) { echo json_encode(["status"=>"limit"]); exit(); }
+    }
+
+    $stmt = $conn->prepare("INSERT INTO videos (userId,title,description,platform,duration,views,date) VALUES (?,?,?,?,?,0,NOW())");
+    $stmt->bind_param("isssi",$user_id,$title,$desc,$platform,$duration);
+    $stmt->execute();
+    echo json_encode(["status"=>"success","video_id"=>$stmt->insert_id]);
+    exit();
+}
+
+// الحصول على جميع الفيديوهات للمستخدم
+if (isset($_POST['action']) && $_POST['action'] == 'getVideos') {
+    if (!isset($_SESSION['user'])) { echo json_encode([]); exit(); }
+    $user_id = $_SESSION['user']['id'];
+    $res = $conn->query("SELECT * FROM videos WHERE userId=$user_id ORDER BY date DESC");
+    $videos = [];
+    while ($row = $res->fetch_assoc()) { $videos[] = $row; }
+    echo json_encode($videos);
+    exit();
+}
+
+?>
+
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reels AI</title>
+<style>
+body { font-family: Arial, sans-serif; background: #121212; color: #fff; margin:0; }
+button { cursor:pointer; border:none; border-radius:5px; padding:10px 15px; }
+.btn-primary { background:#4CAF50; color:#fff; }
+.btn-outline { background:transparent; color:#4CAF50; border:1px solid #4CAF50; }
+.modal { display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.7); justify-content:center; align-items:center; }
+.modal-content { background:#222; padding:20px; border-radius:10px; width:90%; max-width:500px; }
+input,textarea,select { width:100%; padding:10px; border-radius:5px; background:#333; color:#fff; border:none; }
+</style>
+</head>
+<body>
+
+<header style="padding:20px; display:flex; justify-content:space-between; align-items:center;">
+<h1>Reels AI</h1>
+<div class="user-actions">
+<button class="btn-outline" onclick="openLoginModal()">تسجيل الدخول</button>
+<button class="btn-primary" onclick="openRegisterModal()">ابدأ مجانًا</button>
+</div>
+</header>
+
+<main style="padding:20px;">
+<section>
+<h2>إنشاء الفيديو</h2>
+<button class="btn-primary" onclick="openVideoCreator()">إنشاء فيديو جديد</button>
+</section>
+
+<section style="margin-top:30px;">
+<h2>فيديوهاتي</h2>
+<div id="userVideos"></div>
+</section>
+</main>
+
+<!-- مودالات -->
+<div id="loginModal" class="modal">
+<div class="modal-content">
+<h3>تسجيل الدخول</h3>
+<input type="email" id="loginEmail" placeholder="البريد الإلكتروني">
+<input type="password" id="loginPassword" placeholder="كلمة المرور">
+<button class="btn-primary" onclick="login()">دخول</button>
+<button class="btn-outline" onclick="closeModal()">إلغاء</button>
+</div>
+</div>
+
+<div id="registerModal" class="modal">
+<div class="modal-content">
+<h3>تسجيل حساب جديد</h3>
+<input type="text" id="registerName" placeholder="الاسم">
+<input type="email" id="registerEmail" placeholder="البريد الإلكتروني">
+<input type="password" id="registerPassword" placeholder="كلمة المرور">
+<button class="btn-primary" onclick="register()">تسجيل</button>
+<button class="btn-outline" onclick="closeModal()">إلغاء</button>
+</div>
+</div>
+
+<div id="videoCreatorModal" class="modal">
+<div class="modal-content" id="videoCreatorContent"></div>
+<button class="btn-outline" onclick="closeModal()">إغلاق</button>
+</div>
+
+<script>
+// فتح وإغلاق المودالات
+function openLoginModal(){ document.getElementById('loginModal').style.display='flex'; }
+function openRegisterModal(){ document.getElementById('registerModal').style.display='flex'; }
+function closeModal(){ document.querySelectorAll('.modal').forEach(m=>m.style.display='none'); }
+
+// فتح واجهة إنشاء الفيديو
+function openVideoCreator() {
+fetch('<?= $_SERVER['PHP_SELF']?>',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'action=getVideos'})
+.then(res=>res.json()).then(videos=>{
+let content=`<h3>إنشاء فيديو جديد</h3>
+<input id="videoTitle" placeholder="عنوان الفيديو">
+<textarea id="videoDesc" placeholder="وصف الفيديو"></textarea>
+<select id="videoPlatform"><option>اختر المنصة</option><option>TikTok</option><option>Instagram Reels</option><option>YouTube Shorts</option><option>Facebook Reels</option></select>
+<label>مدة الفيديو (دقائق)</label>
+<input type="range" id="videoDuration" min="1" max="5" value="2">
+<span id="videoDurationValue">2 دقائق</span>
+<label>اختيار الصوت</label>
+<select id="videoSound">
+<option value="trend1">ترند 1</option>
+<option value="trend2">ترند 2</option>
+<option value="realistic1">واقعي 1</option>
+<option value="realistic2">واقعي 2</option>
+</select>
+<button class="btn-primary" onclick="createVideo()">إنشاء الفيديو</button>`;
+document.getElementById('videoCreatorContent').innerHTML=content;
+document.getElementById('videoCreatorModal').style.display='flex';
+let slider=document.getElementById('videoDuration');
+let span=document.getElementById('videoDurationValue');
+slider.oninput=()=>{span.textContent=slider.value+' دقائق';};
+});
+}
+
+// تسجيل الدخول
+function login(){
+let email=document.getElementById('loginEmail').value;
+let password=document.getElementById('loginPassword').value;
+fetch('<?= $_SERVER['PHP_SELF']?>',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'action=login&email='+email+'&password='+password})
+.then(res=>res.json()).then(r=>{
+if(r.status=='success'){ location.reload(); }else{ alert('البريد أو كلمة المرور غير صحيحة'); }
+});
+}
+
+// تسجيل مستخدم
+function register(){
+let name=document.getElementById('registerName').value;
+let email=document.getElementById('registerEmail').value;
+let password=document.getElementById('registerPassword').value;
+fetch('<?= $_SERVER['PHP_SELF']?>',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'action=register&name='+name+'&email='+email+'&password='+password})
+.then(res=>res.json()).then(r=>{
+if(r.status=='success'){ location.reload(); }else if(r.status=='exists'){ alert('البريد مستخدم بالفعل'); } });
+}
+
+// إنشاء فيديو
+function createVideo(){
+let title=document.getElementById('videoTitle').value;
+let desc=document.getElementById('videoDesc').value;
+let platform=document.getElementById('videoPlatform').value;
+let duration=document.getElementById('videoDuration').value;
+let sound=document.getElementById('videoSound').value;
+fetch('<?= $_SERVER['PHP_SELF']?>',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'action=createVideo&title='+title+'&description='+desc+'&platform='+platform+'&duration='+duration})
+.then(res=>res.json()).then(r=>{
+if(r.status=='success'){ alert('تم إنشاء الفيديو بنجاح'); closeModal(); loadUserVideos(); }
+else if(r.status=='limit'){ alert('لقد وصلت الحد الأقصى للفيديوهات المجانية'); }
+});
+}
+
+// عرض فيديوهات المستخدم
+function loadUserVideos(){
+fetch('<?= $_SERVER['PHP_SELF']?>',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'action=getVideos'})
+.then(res=>res.json()).then(videos=>{
+let html='';
+videos.forEach(v=>{
+html+=`<div style="background:#333;padding:10px;margin:10px;border-radius:5px;">
+<h4>${v.title}</h4><p>${v.description}</p><p>المدة: ${v.duration} دقائق</p></div>`;
+});
+document.getElementById('userVideos').innerHTML=html;
+});
+}
+
+document.addEventListener('DOMContentLoaded',loadUserVideos);
+</script>
+
+</body>
+</html>
